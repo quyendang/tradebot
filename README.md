@@ -85,3 +85,8 @@ OpenAI is auxiliary only.
   `OPENAI_MODEL=@bot/gpt-5.5`
   `PORTKEY_API_KEY=...`
 - In Portkey mode, the app uses the `portkey_ai` SDK and `x-portkey-api-key` authentication.
+- For Cloudflare AI Gateway, set:
+  `OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/<provider>`
+  `OPENAI_API_KEY=cfut_...`
+  `OPENAI_MODEL=gpt-5.5`
+- In Cloudflare Gateway mode, the app calls `chat/completions` directly with Bearer auth.
