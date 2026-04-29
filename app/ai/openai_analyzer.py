@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
 from openai import AsyncOpenAI
+from portkey_ai import Portkey
 
 from app.ai.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.models.schema import OpenAIAnalysis, SignalState
@@ -30,6 +31,7 @@ class OpenAIAnalyzer:
         self._portkey_api_key = portkey_api_key
         self._use_portkey = bool(normalized_base_url and 'api.portkey.ai' in normalized_base_url)
         self._force_chat_completions = normalized_base_url is not None
+        self._portkey_client = Portkey(api_key=portkey_api_key) if self._use_portkey and portkey_api_key else None
         self._client = None
         if not self._use_portkey and api_key:
             self._client = AsyncOpenAI(api_key=api_key, base_url=normalized_base_url)
@@ -88,7 +90,7 @@ class OpenAIAnalyzer:
             return OpenAIAnalysis()
 
     async def _analyze_with_portkey(self, signal: SignalState) -> OpenAIAnalysis:
-        if not self._base_url or not self._portkey_api_key:
+        if self._portkey_client is None:
             return OpenAIAnalysis()
 
         payload = {
@@ -121,37 +123,32 @@ class OpenAIAnalyzer:
             'reasons': signal.reasons[:8],
         }
 
-        headers = {
-            'Content-Type': 'application/json',
-            'x-portkey-api-key': self._portkey_api_key,
-        }
-        request_body = {
-            'model': self._model,
-            'messages': [
-                {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': build_user_prompt(payload)},
-            ],
-            'response_format': {
-                'type': 'json_schema',
-                'json_schema': {
-                    'name': 'technical_signal_ai_analysis',
-                    'schema': self._analysis_schema(),
-                },
-            },
-            'MAX_TOKENS': 512,
-        }
-
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_seconds)) as client:
-                response = await client.post(f'{self._base_url}/chat/completions', headers=headers, json=request_body)
-                response.raise_for_status()
-            content = response.json()['choices'][0]['message']['content']
+            content = await asyncio.to_thread(self._portkey_chat_completion, payload)
             if not content:
                 raise ValueError('Empty Portkey chat completion content')
             return OpenAIAnalysis.model_validate(json.loads(content))
         except Exception as exc:  # noqa: BLE001
             logger.warning('Portkey analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
+
+    def _portkey_chat_completion(self, payload: dict[str, Any]) -> str:
+        response = self._portkey_client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': build_user_prompt(payload)},
+            ],
+            response_format={
+                'type': 'json_schema',
+                'json_schema': {
+                    'name': 'technical_signal_ai_analysis',
+                    'schema': self._analysis_schema(),
+                },
+            },
+            MAX_TOKENS=512,
+        )
+        return response.choices[0].message.content
 
     async def _analyze_with_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = await self._client.responses.create(

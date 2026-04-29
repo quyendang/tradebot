@@ -84,4 +84,4 @@ OpenAI is auxiliary only.
   `OPENAI_BASE_URL=https://api.portkey.ai/v1`
   `OPENAI_MODEL=@bot/gpt-5.5`
   `PORTKEY_API_KEY=...`
-- In Portkey mode, the app calls `/v1/chat/completions` directly with `x-portkey-api-key`.
+- In Portkey mode, the app uses the `portkey_ai` SDK and `x-portkey-api-key` authentication.

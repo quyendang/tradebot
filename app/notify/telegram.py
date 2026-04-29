@@ -18,19 +18,28 @@ class TelegramNotifier:
         return bool(self._settings.telegram_bot_token and self._settings.telegram_chat_id)
 
     def build_message(self, signal: SignalState) -> str:
-        risks = ', '.join(signal.ai_analysis.risk_notes[:3]) or 'None'
-        conflicts = ', '.join(signal.ai_analysis.conflicts[:3]) or 'None'
+        risks = self._format_list(signal.ai_analysis.risk_notes, default='Khong co')
+        conflicts = self._format_list(signal.ai_analysis.conflicts, default='Khong co')
         dominant_score = max(signal.buy_score, signal.sell_score)
+        dominant_side = 'Mua' if signal.buy_score >= signal.sell_score else 'Ban'
         return (
-            f'{signal.symbol} | {signal.action} | {signal.confidence}\n'
-            f'Price: {signal.price:.2f}\n'
-            f'Buy: {signal.buy_score} | Sell: {signal.sell_score} | Dominant: {dominant_score}\n'
-            f'Support: {signal.support:.2f} | Resistance: {signal.resistance:.2f}\n'
-            f'Invalidation: {signal.invalidation:.2f}\n'
-            f'Summary: {signal.ai_analysis.summary}\n'
-            f'Note: {signal.ai_analysis.telegram_note}\n'
-            f'Risks: {risks}\n'
-            f'Conflicts: {conflicts}'
+            f'Tradebot | {signal.symbol}\n'
+            f'Tin hieu: {self._action_label(signal.action)}\n'
+            f'Do tin cay: {self._confidence_label(signal.confidence)}\n'
+            f'Gia hien tai: {signal.price:.2f}\n'
+            f'Diem uu the: {dominant_side} ({dominant_score})\n'
+            f'Diem Mua/Ban: {signal.buy_score}/{signal.sell_score}\n'
+            f'Ho tro: {signal.support:.2f}\n'
+            f'Khang cu: {signal.resistance:.2f}\n'
+            f'Moc vo hieu: {signal.invalidation:.2f}\n'
+            f'\n'
+            f'Tom tat AI:\n{signal.ai_analysis.summary}\n'
+            f'\n'
+            f'Ghi chu nhanh:\n{signal.ai_analysis.telegram_note}\n'
+            f'\n'
+            f'Rui ro:\n{risks}\n'
+            f'\n'
+            f'Xung dot:\n{conflicts}'
         )
 
     def build_startup_message(
@@ -40,36 +49,64 @@ class TelegramNotifier:
         startup_error: str | None = None,
     ) -> str:
         lines = [
-            'Tradebot started',
-            f'Interval: {interval_seconds}s',
-            f'OpenAI configured: {"yes" if self._settings.openai_api_key else "no"}',
+            'Tradebot da khoi dong',
+            f'Chu ky quet: {interval_seconds}s',
+            f'OpenAI: {"da cau hinh" if self._settings.openai_api_key else "chua cau hinh"}',
         ]
 
         if startup_error is not None:
-            lines.append(f'Initial analysis error: {startup_error}')
+            lines.append(f'Loi phan tich ban dau: {startup_error}')
             return '\n'.join(lines)
 
         if not signals:
-            lines.append('Initial analysis: no signals available')
+            lines.append('Phan tich ban dau: chua co du lieu')
             return '\n'.join(lines)
 
-        lines.append('Initial analysis:')
+        lines.append('Phan tich ban dau:')
         for symbol in sorted(signals):
             signal = signals[symbol]
-            ai_status = (
-                'warning'
-                if signal.ai_analysis.data_quality_warning
-                else 'ok'
-                if signal.ai_analysis.summary != 'AI analysis unavailable'
-                else 'unavailable'
-            )
+            ai_status = self._ai_status_label(signal)
             lines.append(
-                f'{signal.symbol}: {signal.action} {signal.confidence} | '
-                f'Buy {signal.buy_score} Sell {signal.sell_score} | AI {ai_status}'
+                f'{signal.symbol}: {self._action_label(signal.action)} | '
+                f'{self._confidence_label(signal.confidence)} | '
+                f'M/B {signal.buy_score}/{signal.sell_score} | AI {ai_status}'
             )
-            lines.append(f'Note: {signal.ai_analysis.telegram_note}')
+            lines.append(f'Nhanh: {signal.ai_analysis.telegram_note}')
 
         return '\n'.join(lines)
+
+    @staticmethod
+    def _format_list(items: list[str], default: str) -> str:
+        if not items:
+            return default
+        return '\n'.join(f'- {item}' for item in items[:3])
+
+    @staticmethod
+    def _action_label(action: str) -> str:
+        labels = {
+            'BUY_WATCH': 'Theo doi Mua',
+            'SELL_WATCH': 'Theo doi Ban',
+            'WAIT_CONFLICT': 'Cho xac nhan',
+            'HOLD': 'Dung quan sat',
+        }
+        return labels.get(action, action)
+
+    @staticmethod
+    def _confidence_label(confidence: str) -> str:
+        labels = {
+            'high': 'Cao',
+            'medium': 'Trung binh',
+            'low': 'Thap',
+        }
+        return labels.get(confidence, confidence)
+
+    @staticmethod
+    def _ai_status_label(signal: SignalState) -> str:
+        if signal.ai_analysis.data_quality_warning:
+            return 'Canh bao du lieu'
+        if signal.ai_analysis.summary == 'AI analysis unavailable':
+            return 'Khong kha dung'
+        return 'Binh thuong'
 
     async def send_text(self, text: str) -> str | None:
         if not self.is_enabled():
