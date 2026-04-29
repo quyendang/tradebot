@@ -18,28 +18,28 @@ class TelegramNotifier:
         return bool(self._settings.telegram_bot_token and self._settings.telegram_chat_id)
 
     def build_message(self, signal: SignalState) -> str:
-        risks = self._format_list(signal.ai_analysis.risk_notes, default='Khong co')
-        conflicts = self._format_list(signal.ai_analysis.conflicts, default='Khong co')
+        risks = self._format_list(signal.ai_analysis.risk_notes, default='Không có')
+        conflicts = self._format_list(signal.ai_analysis.conflicts, default='Không có')
         dominant_score = max(signal.buy_score, signal.sell_score)
-        dominant_side = 'Mua' if signal.buy_score >= signal.sell_score else 'Ban'
+        dominant_side = 'Mua' if signal.buy_score >= signal.sell_score else 'Bán'
         return (
             f'Tradebot | {signal.symbol}\n'
-            f'Tin hieu: {self._action_label(signal.action)}\n'
-            f'Do tin cay: {self._confidence_label(signal.confidence)}\n'
-            f'Gia hien tai: {signal.price:.2f}\n'
-            f'Diem uu the: {dominant_side} ({dominant_score})\n'
-            f'Diem Mua/Ban: {signal.buy_score}/{signal.sell_score}\n'
-            f'Ho tro: {signal.support:.2f}\n'
-            f'Khang cu: {signal.resistance:.2f}\n'
-            f'Moc vo hieu: {signal.invalidation:.2f}\n'
+            f'Tín hiệu: {self._action_label(signal.action)}\n'
+            f'Độ tin cậy: {self._confidence_label(signal.confidence)}\n'
+            f'Giá hiện tại: {signal.price:.2f}\n'
+            f'Điểm ưu thế: {dominant_side} ({dominant_score})\n'
+            f'Điểm Mua/Bán: {signal.buy_score}/{signal.sell_score}\n'
+            f'Hỗ trợ: {signal.support:.2f}\n'
+            f'Kháng cự: {signal.resistance:.2f}\n'
+            f'Mốc vô hiệu: {signal.invalidation:.2f}\n'
             f'\n'
-            f'Tom tat AI:\n{signal.ai_analysis.summary}\n'
+            f'Tóm tắt AI:\n{signal.ai_analysis.summary}\n'
             f'\n'
-            f'Ghi chu nhanh:\n{signal.ai_analysis.telegram_note}\n'
+            f'Ghi chú nhanh:\n{signal.ai_analysis.telegram_note}\n'
             f'\n'
-            f'Rui ro:\n{risks}\n'
+            f'Rủi ro:\n{risks}\n'
             f'\n'
-            f'Xung dot:\n{conflicts}'
+            f'Xung đột:\n{conflicts}'
         )
 
     def build_startup_message(
@@ -49,29 +49,30 @@ class TelegramNotifier:
         startup_error: str | None = None,
     ) -> str:
         lines = [
-            'Tradebot da khoi dong',
-            f'Chu ky quet: {interval_seconds}s',
-            f'OpenAI: {"da cau hinh" if self._settings.openai_api_key else "chua cau hinh"}',
+            'Tradebot đã khởi động',
+            f'Chu kỳ quét: {interval_seconds}s',
+            f'OpenAI: {"đã cấu hình" if self._settings.openai_api_key else "chưa cấu hình"}',
         ]
 
         if startup_error is not None:
-            lines.append(f'Loi phan tich ban dau: {startup_error}')
+            lines.append(f'Lỗi phân tích ban đầu: {startup_error}')
             return '\n'.join(lines)
 
         if not signals:
-            lines.append('Phan tich ban dau: chua co du lieu')
+            lines.append('Phân tích ban đầu: chưa có dữ liệu')
             return '\n'.join(lines)
 
-        lines.append('Phan tich ban dau:')
+        lines.append('Phân tích ban đầu:')
         for symbol in sorted(signals):
             signal = signals[symbol]
             ai_status = self._ai_status_label(signal)
-            lines.append(
-                f'{signal.symbol}: {self._action_label(signal.action)} | '
-                f'{self._confidence_label(signal.confidence)} | '
-                f'M/B {signal.buy_score}/{signal.sell_score} | AI {ai_status}'
-            )
-            lines.append(f'Nhanh: {signal.ai_analysis.telegram_note}')
+            lines.append('')
+            lines.append(f'• {signal.symbol}')
+            lines.append(f'  - Tín hiệu: {self._action_label(signal.action)}')
+            lines.append(f'  - Độ tin cậy: {self._confidence_label(signal.confidence)}')
+            lines.append(f'  - Điểm Mua/Bán: {signal.buy_score}/{signal.sell_score}')
+            lines.append(f'  - AI: {ai_status}')
+            lines.append(f'  - Ghi chú: {signal.ai_analysis.telegram_note}')
 
         return '\n'.join(lines)
 
@@ -84,10 +85,10 @@ class TelegramNotifier:
     @staticmethod
     def _action_label(action: str) -> str:
         labels = {
-            'BUY_WATCH': 'Theo doi Mua',
-            'SELL_WATCH': 'Theo doi Ban',
-            'WAIT_CONFLICT': 'Cho xac nhan',
-            'HOLD': 'Dung quan sat',
+            'BUY_WATCH': 'Theo dõi Mua',
+            'SELL_WATCH': 'Theo dõi Bán',
+            'WAIT_CONFLICT': 'Chờ xác nhận',
+            'HOLD': 'Đứng quan sát',
         }
         return labels.get(action, action)
 
@@ -95,18 +96,18 @@ class TelegramNotifier:
     def _confidence_label(confidence: str) -> str:
         labels = {
             'high': 'Cao',
-            'medium': 'Trung binh',
-            'low': 'Thap',
+            'medium': 'Trung bình',
+            'low': 'Thấp',
         }
         return labels.get(confidence, confidence)
 
     @staticmethod
     def _ai_status_label(signal: SignalState) -> str:
         if signal.ai_analysis.data_quality_warning:
-            return 'Canh bao du lieu'
+            return 'Cảnh báo dữ liệu'
         if signal.ai_analysis.summary == 'AI analysis unavailable':
-            return 'Khong kha dung'
-        return 'Binh thuong'
+            return 'Không khả dụng'
+        return 'Bình thường'
 
     async def send_text(self, text: str) -> str | None:
         if not self.is_enabled():
