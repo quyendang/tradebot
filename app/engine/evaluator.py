@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from app.ai.openai_analyzer import OpenAIAnalyzer
 from app.engine.decision import DecisionEngine
 from app.engine.scorer import TechnicalScorer
 from app.models.schema import OpenAIAnalysis, PriceZone, SignalState, TimeframeScore
@@ -14,12 +13,11 @@ TIMEFRAME_WEIGHTS: dict[str, float] = {
 
 
 class SignalEvaluator:
-    def __init__(self, ai_analyzer: OpenAIAnalyzer) -> None:
+    def __init__(self) -> None:
         self._scorer = TechnicalScorer()
         self._decision_engine = DecisionEngine()
-        self._ai_analyzer = ai_analyzer
 
-    async def evaluate(self, symbol: str, timeframe_frames: dict[str, object]) -> SignalState:
+    def evaluate(self, symbol: str, timeframe_frames: dict[str, object]) -> SignalState:
         timeframe_scores = [
             self._scorer.score_timeframe(symbol, timeframe, frame)
             for timeframe, frame in timeframe_frames.items()
@@ -69,8 +67,10 @@ class SignalEvaluator:
             buy_zone=buy_zone,
             sell_zone=sell_zone,
         )
+        return signal
 
-        ai_analysis = await self._ai_analyzer.analyze(signal)
+    @staticmethod
+    def apply_ai_analysis(signal: SignalState, ai_analysis: OpenAIAnalysis) -> SignalState:
         signal.ai_analysis = ai_analysis
         if ai_analysis.data_quality_warning:
             signal.action = 'HOLD'

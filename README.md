@@ -6,6 +6,7 @@ This phase includes:
 - Binance public OHLCV fetcher
 - technical indicators and decision engine
 - auxiliary OpenAI analyzer using `OPENAI_API_KEY`, `OPENAI_MODEL`, and optional `OPENAI_BASE_URL`
+- automatic `4h` chart rendering for AI screenshot context
 - Telegram notifier and anti-spam policy
 - automatic background scheduler started with FastAPI
 - startup Telegram status message with initial analysis summary
@@ -72,10 +73,13 @@ On startup, if Telegram is configured, the bot also sends:
 
 OpenAI is auxiliary only.
 - It receives a compact market snapshot plus the technical decision.
+- It also receives one rendered `4h` chart screenshot as visual context when chart rendering succeeds.
 - It does not directly change the technical decision.
 - The only allowed override is forcing `HOLD` when `data_quality_warning=true`.
 - If OpenAI fails or is not configured, the bot continues with `AI analysis unavailable`.
+- If chart rendering or multimodal analysis fails, the bot falls back to text-only AI analysis automatically.
 - To route requests through a proxy-compatible OpenAI endpoint, set `OPENAI_BASE_URL`.
+- Chart rendering uses `AI_CHART_TIMEFRAME` and `AI_CHART_CANDLE_LIMIT`.
 - Example proxy configuration: `OPENAI_BASE_URL=https://sub.tehuio.com`
 - If you set only the root domain, the app normalizes it to `/v1` automatically for OpenAI-compatible proxies.
 - If `OPENAI_BASE_URL` is set, the app uses `/v1/chat/completions` directly for maximum proxy compatibility.

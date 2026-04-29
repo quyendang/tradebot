@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 from typing import Any
@@ -30,7 +31,6 @@ class OpenAIAnalyzer:
         self._base_url = normalized_base_url
         self._timeout_seconds = timeout_seconds
         self._api_key = api_key
-        self._portkey_api_key = portkey_api_key
         self._use_portkey = bool(normalized_base_url and 'api.portkey.ai' in normalized_base_url)
         self._use_cloudflare_gateway = bool(normalized_base_url and 'gateway.ai.cloudflare.com' in normalized_base_url)
         self._force_chat_completions = normalized_base_url is not None
@@ -39,43 +39,31 @@ class OpenAIAnalyzer:
         if not self._use_portkey and not self._use_cloudflare_gateway and api_key:
             self._client = AsyncOpenAI(api_key=api_key, base_url=normalized_base_url)
 
-    async def analyze(self, signal: SignalState) -> OpenAIAnalysis:
+    async def analyze(
+        self,
+        signal: SignalState,
+        chart_image: bytes | None = None,
+        chart_timeframe: str | None = None,
+    ) -> OpenAIAnalysis:
+        payload = self._build_payload(signal, chart_timeframe)
+
         if self._use_portkey:
-            return await self._analyze_with_portkey(signal)
+            return await self._analyze_with_portkey(signal, payload, chart_image)
         if self._use_cloudflare_gateway:
-            return await self._analyze_with_cloudflare_gateway(signal)
+            return await self._analyze_with_cloudflare_gateway(signal, payload, chart_image)
         if self._client is None:
             return OpenAIAnalysis()
 
-        payload = {
-            'symbol': signal.symbol,
-            'action': signal.action,
-            'confidence': signal.confidence,
-            'buy_score': signal.buy_score,
-            'sell_score': signal.sell_score,
-            'price': signal.price,
-            'support': signal.support,
-            'resistance': signal.resistance,
-            'invalidation': signal.invalidation,
-            'timeframes': [
-                {
-                    'timeframe': score.timeframe,
-                    'buy_score': score.buy_score,
-                    'sell_score': score.sell_score,
-                    'support': score.support,
-                    'resistance': score.resistance,
-                    'invalidation': score.invalidation,
-                    'close': score.indicators.close,
-                    'ema_50': score.indicators.ema_50,
-                    'ema_200': score.indicators.ema_200,
-                    'rsi_14': score.indicators.rsi_14,
-                    'macd_histogram': score.indicators.macd_histogram,
-                    'reasons': score.reasons[:4],
-                }
-                for score in signal.timeframe_scores
-            ],
-            'reasons': signal.reasons[:8],
-        }
+        if chart_image is not None:
+            try:
+                content = await self._analyze_with_chat_completions(payload, chart_image=chart_image)
+                return OpenAIAnalysis.model_validate(content)
+            except Exception as chart_exc:  # noqa: BLE001
+                logger.warning(
+                    'OpenAI multimodal analysis failed for %s, falling back to text-only: %s',
+                    signal.symbol,
+                    chart_exc,
+                )
 
         if not self._force_chat_completions:
             try:
@@ -94,115 +82,76 @@ class OpenAIAnalyzer:
             logger.warning('OpenAI analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
 
-    async def _analyze_with_portkey(self, signal: SignalState) -> OpenAIAnalysis:
+    async def _analyze_with_portkey(
+        self,
+        signal: SignalState,
+        payload: dict[str, Any],
+        chart_image: bytes | None,
+    ) -> OpenAIAnalysis:
         if self._portkey_client is None:
             return OpenAIAnalysis()
 
-        payload = {
-            'symbol': signal.symbol,
-            'action': signal.action,
-            'confidence': signal.confidence,
-            'buy_score': signal.buy_score,
-            'sell_score': signal.sell_score,
-            'price': signal.price,
-            'support': signal.support,
-            'resistance': signal.resistance,
-            'invalidation': signal.invalidation,
-            'timeframes': [
-                {
-                    'timeframe': score.timeframe,
-                    'buy_score': score.buy_score,
-                    'sell_score': score.sell_score,
-                    'support': score.support,
-                    'resistance': score.resistance,
-                    'invalidation': score.invalidation,
-                    'close': score.indicators.close,
-                    'ema_50': score.indicators.ema_50,
-                    'ema_200': score.indicators.ema_200,
-                    'rsi_14': score.indicators.rsi_14,
-                    'macd_histogram': score.indicators.macd_histogram,
-                    'reasons': score.reasons[:4],
-                }
-                for score in signal.timeframe_scores
-            ],
-            'reasons': signal.reasons[:8],
-        }
-
         try:
-            content = await asyncio.to_thread(self._portkey_chat_completion, payload)
+            content = await asyncio.to_thread(self._portkey_chat_completion, payload, chart_image)
             if not content:
                 raise ValueError('Empty Portkey chat completion content')
             return OpenAIAnalysis.model_validate(json.loads(content))
         except Exception as exc:  # noqa: BLE001
+            if chart_image is not None:
+                logger.warning(
+                    'Portkey multimodal analysis failed for %s, falling back to text-only: %s',
+                    signal.symbol,
+                    exc,
+                )
+                try:
+                    content = await asyncio.to_thread(self._portkey_chat_completion, payload, None)
+                    if not content:
+                        raise ValueError('Empty Portkey text-only chat completion content')
+                    return OpenAIAnalysis.model_validate(json.loads(content))
+                except Exception as fallback_exc:  # noqa: BLE001
+                    logger.warning('Portkey text-only fallback failed for %s: %s', signal.symbol, fallback_exc)
             logger.warning('Portkey analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
 
-    async def _analyze_with_cloudflare_gateway(self, signal: SignalState) -> OpenAIAnalysis:
+    async def _analyze_with_cloudflare_gateway(
+        self,
+        signal: SignalState,
+        payload: dict[str, Any],
+        chart_image: bytes | None,
+    ) -> OpenAIAnalysis:
         if not self._base_url or not self._api_key:
             return OpenAIAnalysis()
 
-        payload = {
-            'symbol': signal.symbol,
-            'action': signal.action,
-            'confidence': signal.confidence,
-            'buy_score': signal.buy_score,
-            'sell_score': signal.sell_score,
-            'price': signal.price,
-            'support': signal.support,
-            'resistance': signal.resistance,
-            'invalidation': signal.invalidation,
-            'timeframes': [
-                {
-                    'timeframe': score.timeframe,
-                    'buy_score': score.buy_score,
-                    'sell_score': score.sell_score,
-                    'support': score.support,
-                    'resistance': score.resistance,
-                    'invalidation': score.invalidation,
-                    'close': score.indicators.close,
-                    'ema_50': score.indicators.ema_50,
-                    'ema_200': score.indicators.ema_200,
-                    'rsi_14': score.indicators.rsi_14,
-                    'macd_histogram': score.indicators.macd_histogram,
-                    'reasons': score.reasons[:4],
-                }
-                for score in signal.timeframe_scores
-            ],
-            'reasons': signal.reasons[:8],
-        }
-
-        headers = {
-            'Authorization': f'Bearer {self._api_key}',
-            'Content-Type': 'application/json',
-        }
-        request_body = {
-            'model': self._model,
-            'messages': [
-                {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': build_user_prompt(payload)},
-            ],
-            'max_tokens': 512,
-        }
-        url = self._chat_completion_url(self._base_url)
-
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_seconds)) as client:
-                response = await client.post(url, headers=headers, json=request_body)
-                response.raise_for_status()
-            content = response.json()['choices'][0]['message']['content']
-            if not content:
-                raise ValueError('Empty Cloudflare Gateway chat completion content')
-            return OpenAIAnalysis.model_validate(json.loads(content))
+            return await self._cloudflare_gateway_request(payload, chart_image=chart_image)
         except Exception as exc:  # noqa: BLE001
+            if chart_image is not None:
+                logger.warning(
+                    'Cloudflare Gateway multimodal analysis failed for %s, falling back to text-only: %s',
+                    signal.symbol,
+                    exc,
+                )
+                try:
+                    return await self._cloudflare_gateway_request(payload, chart_image=None)
+                except Exception as fallback_exc:  # noqa: BLE001
+                    logger.warning(
+                        'Cloudflare Gateway text-only fallback failed for %s: %s',
+                        signal.symbol,
+                        fallback_exc,
+                    )
             logger.warning('Cloudflare Gateway analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
 
-    def _portkey_chat_completion(self, payload: dict[str, Any]) -> str:
+    def _portkey_chat_completion(
+        self,
+        payload: dict[str, Any],
+        chart_image: bytes | None = None,
+    ) -> str:
         response = self._portkey_client.chat.completions.create(
             model=self._model,
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': build_user_prompt(payload)},
+                {'role': 'user', 'content': self._chat_user_content(payload, chart_image=chart_image)},
             ],
             response_format={
                 'type': 'json_schema',
@@ -232,12 +181,16 @@ class OpenAIAnalyzer:
         )
         return json.loads(response.output_text)
 
-    async def _analyze_with_chat_completions(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_with_chat_completions(
+        self,
+        payload: dict[str, Any],
+        chart_image: bytes | None = None,
+    ) -> dict[str, Any]:
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': build_user_prompt(payload)},
+                {'role': 'user', 'content': self._chat_user_content(payload, chart_image=chart_image)},
             ],
             response_format={
                 'type': 'json_schema',
@@ -251,6 +204,85 @@ class OpenAIAnalyzer:
         if not content:
             raise ValueError('Empty chat completion content')
         return json.loads(content)
+
+    async def _cloudflare_gateway_request(
+        self,
+        payload: dict[str, Any],
+        chart_image: bytes | None,
+    ) -> OpenAIAnalysis:
+        headers = {
+            'Authorization': f'Bearer {self._api_key}',
+            'Content-Type': 'application/json',
+        }
+        request_body = {
+            'model': self._model,
+            'messages': [
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': self._chat_user_content(payload, chart_image=chart_image)},
+            ],
+            'max_tokens': 512,
+        }
+        url = self._chat_completion_url(self._base_url)
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_seconds)) as client:
+            response = await client.post(url, headers=headers, json=request_body)
+            response.raise_for_status()
+        content = response.json()['choices'][0]['message']['content']
+        if not content:
+            raise ValueError('Empty Cloudflare Gateway chat completion content')
+        return OpenAIAnalysis.model_validate(json.loads(content))
+
+    def _build_payload(self, signal: SignalState, chart_timeframe: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            'symbol': signal.symbol,
+            'action': signal.action,
+            'confidence': signal.confidence,
+            'buy_score': signal.buy_score,
+            'sell_score': signal.sell_score,
+            'price': signal.price,
+            'support': signal.support,
+            'resistance': signal.resistance,
+            'invalidation': signal.invalidation,
+            'timeframes': [
+                {
+                    'timeframe': score.timeframe,
+                    'buy_score': score.buy_score,
+                    'sell_score': score.sell_score,
+                    'support': score.support,
+                    'resistance': score.resistance,
+                    'invalidation': score.invalidation,
+                    'close': score.indicators.close,
+                    'ema_50': score.indicators.ema_50,
+                    'ema_200': score.indicators.ema_200,
+                    'rsi_14': score.indicators.rsi_14,
+                    'macd_histogram': score.indicators.macd_histogram,
+                    'reasons': score.reasons[:4],
+                }
+                for score in signal.timeframe_scores
+            ],
+            'reasons': signal.reasons[:8],
+        }
+        if chart_timeframe:
+            payload['chart_timeframe'] = chart_timeframe
+        return payload
+
+    def _chat_user_content(
+        self,
+        payload: dict[str, Any],
+        chart_image: bytes | None = None,
+    ) -> str | list[dict[str, Any]]:
+        prompt = build_user_prompt(payload)
+        if chart_image is None:
+            return prompt
+        return [
+            {'type': 'text', 'text': prompt},
+            {
+                'type': 'image_url',
+                'image_url': {
+                    'url': f'data:image/png;base64,{base64.b64encode(chart_image).decode("ascii")}',
+                },
+            },
+        ]
 
     @staticmethod
     def _analysis_schema() -> dict[str, Any]:

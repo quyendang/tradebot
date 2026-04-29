@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     openai_model: str = 'gpt-4.1-mini'
     openai_base_url: str | None = None
     portkey_api_key: str | None = None
+    ai_chart_timeframe: str = '4h'
+    ai_chart_candle_limit: int = Field(default=140, ge=60, le=400)
 
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None

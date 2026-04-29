@@ -6,6 +6,7 @@ import logging
 from app.ai.openai_analyzer import OpenAIAnalyzer
 from app.config import Settings
 from app.engine.evaluator import SignalEvaluator
+from app.market.charting import ChartRenderer
 from app.market.exchange import ExchangeProvider
 from app.market.indicators import add_indicators
 from app.models.schema import SignalEnvelope, SignalState
@@ -23,14 +24,17 @@ class SignalService:
         self._state_store = state_store
         self._anti_spam = AntiSpamPolicy(settings)
         self._notifier = TelegramNotifier(settings)
-        self._evaluator = SignalEvaluator(
-            ai_analyzer=OpenAIAnalyzer(
-                settings.openai_api_key,
-                settings.openai_model,
-                settings.openai_base_url,
-                settings.portkey_api_key,
-                settings.request_timeout_seconds,
-            )
+        self._evaluator = SignalEvaluator()
+        self._ai_analyzer = OpenAIAnalyzer(
+            settings.openai_api_key,
+            settings.openai_model,
+            settings.openai_base_url,
+            settings.portkey_api_key,
+            settings.request_timeout_seconds,
+        )
+        self._chart_renderer = ChartRenderer(
+            timeframe=settings.ai_chart_timeframe,
+            candle_limit=settings.ai_chart_candle_limit,
         )
 
     async def run_once(self, allow_notifications: bool = True) -> list[str]:
@@ -48,7 +52,14 @@ class SignalService:
                 )
                 timeframe_frames[timeframe] = add_indicators(frame)
 
-            signal = await self._evaluator.evaluate(symbol, timeframe_frames)
+            signal = self._evaluator.evaluate(symbol, timeframe_frames)
+            chart_image = self._render_ai_chart(symbol, timeframe_frames, signal)
+            ai_analysis = await self._ai_analyzer.analyze(
+                signal,
+                chart_image=chart_image,
+                chart_timeframe=self._chart_renderer.timeframe if chart_image else None,
+            )
+            signal = self._evaluator.apply_ai_analysis(signal, ai_analysis)
             signals[symbol] = signal
             updated.append(symbol)
 
@@ -80,6 +91,23 @@ class SignalService:
             startup_error=startup_error,
         )
         return await self._notifier.send_text(message)
+
+    def _render_ai_chart(
+        self,
+        symbol: str,
+        timeframe_frames: dict[str, object],
+        signal: SignalState,
+    ) -> bytes | None:
+        timeframe = self._chart_renderer.timeframe
+        frame = timeframe_frames.get(timeframe)
+        if frame is None:
+            logger.warning('AI chart skipped for %s: timeframe %s unavailable', symbol, timeframe)
+            return None
+        try:
+            return self._chart_renderer.render_signal_chart(frame, signal)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('AI chart render failed for %s %s: %s', symbol, timeframe, exc)
+            return None
 
 
 class BackgroundScheduler:
