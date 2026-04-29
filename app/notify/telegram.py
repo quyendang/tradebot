@@ -32,6 +32,8 @@ class TelegramNotifier:
             f'Hỗ trợ: {signal.support:.2f}\n'
             f'Kháng cự: {signal.resistance:.2f}\n'
             f'Mốc vô hiệu: {signal.invalidation:.2f}\n'
+            f'Vùng mua dự kiến: {self._format_zone(signal.buy_zone)}\n'
+            f'Vùng bán dự kiến: {self._format_zone(signal.sell_zone)}\n'
             f'\n'
             f'Tóm tắt AI:\n{signal.ai_analysis.summary}\n'
             f'\n'
@@ -72,6 +74,8 @@ class TelegramNotifier:
             lines.append(f'  - Độ tin cậy: {self._confidence_label(signal.confidence)}')
             lines.append(f'  - Điểm Mua/Bán: {signal.buy_score}/{signal.sell_score}')
             lines.append(f'  - AI: {ai_status}')
+            lines.append(f'  - Vùng mua: {self._format_zone(signal.buy_zone)}')
+            lines.append(f'  - Vùng bán: {self._format_zone(signal.sell_zone)}')
             lines.append(f'  - Ghi chú: {signal.ai_analysis.telegram_note}')
 
         return '\n'.join(lines)
@@ -108,6 +112,12 @@ class TelegramNotifier:
         if signal.ai_analysis.summary == 'AI analysis unavailable':
             return 'Không khả dụng'
         return 'Bình thường'
+
+    @staticmethod
+    def _format_zone(zone) -> str:
+        if zone is None:
+            return 'Chưa có'
+        return f'{zone.low:.2f} - {zone.high:.2f}'
 
     async def send_text(self, text: str) -> str | None:
         if not self.is_enabled():

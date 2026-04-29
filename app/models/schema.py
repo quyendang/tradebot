@@ -52,6 +52,13 @@ class OpenAIAnalysis(BaseModel):
     data_quality_warning: bool = False
 
 
+class PriceZone(BaseModel):
+    low: float
+    high: float
+    zone_type: Literal['pullback_buy', 'breakout_buy', 'rejection_sell', 'breakdown_sell']
+    note: str
+
+
 class TimeframeScore(BaseModel):
     timeframe: str
     buy_score: int
@@ -77,6 +84,8 @@ class SignalState(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     timeframe_scores: list[TimeframeScore] = Field(default_factory=list)
     ai_analysis: OpenAIAnalysis = Field(default_factory=OpenAIAnalysis)
+    buy_zone: PriceZone | None = None
+    sell_zone: PriceZone | None = None
 
 
 class TelegramState(BaseModel):
