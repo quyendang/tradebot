@@ -80,3 +80,8 @@ OpenAI is auxiliary only.
 - If you set only the root domain, the app normalizes it to `/v1` automatically for OpenAI-compatible proxies.
 - If `OPENAI_BASE_URL` is set, the app uses `/v1/chat/completions` directly for maximum proxy compatibility.
 - Without `OPENAI_BASE_URL`, the app tries `Responses API` first and falls back to `chat.completions` if needed.
+- For Portkey, set:
+  `OPENAI_BASE_URL=https://api.portkey.ai/v1`
+  `OPENAI_MODEL=@bot/gpt-5.5`
+  `PORTKEY_API_KEY=...`
+- In Portkey mode, the app calls `/v1/chat/completions` directly with `x-portkey-api-key`.

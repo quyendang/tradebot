@@ -28,6 +28,8 @@ class SignalService:
                 settings.openai_api_key,
                 settings.openai_model,
                 settings.openai_base_url,
+                settings.portkey_api_key,
+                settings.request_timeout_seconds,
             )
         )
 

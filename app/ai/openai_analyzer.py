@@ -5,6 +5,7 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.ai.prompts import SYSTEM_PROMPT, build_user_prompt
@@ -14,13 +15,28 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIAnalyzer:
-    def __init__(self, api_key: str | None, model: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str | None,
+        model: str,
+        base_url: str | None = None,
+        portkey_api_key: str | None = None,
+        timeout_seconds: int = 20,
+    ) -> None:
         self._model = model
         normalized_base_url = self._normalize_base_url(base_url)
+        self._base_url = normalized_base_url
+        self._timeout_seconds = timeout_seconds
+        self._portkey_api_key = portkey_api_key
+        self._use_portkey = bool(normalized_base_url and 'api.portkey.ai' in normalized_base_url)
         self._force_chat_completions = normalized_base_url is not None
-        self._client = AsyncOpenAI(api_key=api_key, base_url=normalized_base_url) if api_key else None
+        self._client = None
+        if not self._use_portkey and api_key:
+            self._client = AsyncOpenAI(api_key=api_key, base_url=normalized_base_url)
 
     async def analyze(self, signal: SignalState) -> OpenAIAnalysis:
+        if self._use_portkey:
+            return await self._analyze_with_portkey(signal)
         if self._client is None:
             return OpenAIAnalysis()
 
@@ -69,6 +85,72 @@ class OpenAIAnalyzer:
             return OpenAIAnalysis.model_validate(content)
         except Exception as exc:  # noqa: BLE001
             logger.warning('OpenAI analysis failed for %s: %s', signal.symbol, exc)
+            return OpenAIAnalysis()
+
+    async def _analyze_with_portkey(self, signal: SignalState) -> OpenAIAnalysis:
+        if not self._base_url or not self._portkey_api_key:
+            return OpenAIAnalysis()
+
+        payload = {
+            'symbol': signal.symbol,
+            'action': signal.action,
+            'confidence': signal.confidence,
+            'buy_score': signal.buy_score,
+            'sell_score': signal.sell_score,
+            'price': signal.price,
+            'support': signal.support,
+            'resistance': signal.resistance,
+            'invalidation': signal.invalidation,
+            'timeframes': [
+                {
+                    'timeframe': score.timeframe,
+                    'buy_score': score.buy_score,
+                    'sell_score': score.sell_score,
+                    'support': score.support,
+                    'resistance': score.resistance,
+                    'invalidation': score.invalidation,
+                    'close': score.indicators.close,
+                    'ema_50': score.indicators.ema_50,
+                    'ema_200': score.indicators.ema_200,
+                    'rsi_14': score.indicators.rsi_14,
+                    'macd_histogram': score.indicators.macd_histogram,
+                    'reasons': score.reasons[:4],
+                }
+                for score in signal.timeframe_scores
+            ],
+            'reasons': signal.reasons[:8],
+        }
+
+        headers = {
+            'Content-Type': 'application/json',
+            'x-portkey-api-key': self._portkey_api_key,
+        }
+        request_body = {
+            'model': self._model,
+            'messages': [
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': build_user_prompt(payload)},
+            ],
+            'response_format': {
+                'type': 'json_schema',
+                'json_schema': {
+                    'name': 'technical_signal_ai_analysis',
+                    'schema': self._analysis_schema(),
+                },
+            },
+            'MAX_TOKENS': 512,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_seconds)) as client:
+                response = await client.post(f'{self._base_url}/chat/completions', headers=headers, json=request_body)
+                response.raise_for_status()
+            content = response.json()['choices'][0]['message']['content']
+            if not content:
+                raise ValueError('Empty Portkey chat completion content')
+            return OpenAIAnalysis.model_validate(json.loads(content))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Portkey analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
 
     async def _analyze_with_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
