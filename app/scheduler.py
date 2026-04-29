@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from app.ai.openai_analyzer import OpenAIAnalyzer
+from app.config import Settings
+from app.engine.evaluator import SignalEvaluator
+from app.market.exchange import ExchangeProvider
+from app.market.indicators import add_indicators
+from app.models.schema import SignalEnvelope, SignalState
+from app.notify.anti_spam import AntiSpamPolicy
+from app.notify.telegram import TelegramNotifier
+from app.storage.state import StateStore
+
+logger = logging.getLogger(__name__)
+
+
+class SignalService:
+    def __init__(self, settings: Settings, exchange: ExchangeProvider, state_store: StateStore) -> None:
+        self._settings = settings
+        self._exchange = exchange
+        self._state_store = state_store
+        self._anti_spam = AntiSpamPolicy(settings)
+        self._notifier = TelegramNotifier(settings)
+        self._evaluator = SignalEvaluator(
+            ai_analyzer=OpenAIAnalyzer(settings.openai_api_key, settings.openai_model)
+        )
+
+    async def run_once(self) -> list[str]:
+        state = self._state_store.load()
+        signals = state.signals
+        updated: list[str] = []
+
+        for symbol in self._settings.default_symbols:
+            timeframe_frames = {}
+            for timeframe in self._settings.default_timeframes:
+                frame = await self._exchange.fetch_klines(
+                    symbol=symbol,
+                    interval=timeframe,
+                    limit=self._settings.kline_limit,
+                )
+                timeframe_frames[timeframe] = add_indicators(frame)
+
+            signal = await self._evaluator.evaluate(symbol, timeframe_frames)
+            signals[symbol] = signal
+            updated.append(symbol)
+
+            previous = state.telegram.get(symbol)
+            if self._anti_spam.should_send(signal, previous):
+                message = await self._notifier.send(signal)
+                if message is not None:
+                    state.telegram[symbol] = self._state_store.update_telegram_state(symbol, signal, message).telegram[symbol]
+                elif not self._notifier.is_enabled():
+                    logger.info('Telegram disabled; no notification persisted for %s', symbol)
+
+        state.signals = signals
+        self._state_store.save(state)
+        return updated
+
+    def get_signals(self) -> SignalEnvelope:
+        state = self._state_store.load()
+        return SignalEnvelope(signals=state.signals, updated_at=state.updated_at)
+
+    def get_signal(self, symbol: str) -> SignalState | None:
+        return self._state_store.load().signals.get(symbol.upper())
+
+
+class BackgroundScheduler:
+    def __init__(self, service: SignalService, interval_seconds: int) -> None:
+        self._service = service
+        self._interval_seconds = interval_seconds
+        self._task: asyncio.Task[None] | None = None
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run_forever())
+        logger.info('Background scheduler started with interval=%s seconds', self._interval_seconds)
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            logger.info('Background scheduler stopped')
+        finally:
+            self._task = None
+
+    async def _run_forever(self) -> None:
+        while True:
+            try:
+                async with self._lock:
+                    updated = await self._service.run_once()
+                logger.info('Scheduled analysis cycle completed for symbols=%s', updated)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.exception('Scheduled analysis cycle failed: %s', exc)
+            await asyncio.sleep(self._interval_seconds)

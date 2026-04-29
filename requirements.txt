@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic-settings
+httpx
+pandas
+numpy
+ta
+openai
