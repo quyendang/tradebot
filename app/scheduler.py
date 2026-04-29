@@ -53,12 +53,7 @@ class SignalService:
                 timeframe_frames[timeframe] = add_indicators(frame)
 
             signal = self._evaluator.evaluate(symbol, timeframe_frames)
-            chart_image = self._render_ai_chart(symbol, timeframe_frames, signal)
-            ai_analysis = await self._ai_analyzer.analyze(
-                signal,
-                chart_image=chart_image,
-                chart_timeframe=self._chart_renderer.timeframe if chart_image else None,
-            )
+            ai_analysis = await self._ai_analyzer.analyze(signal)
             signal = self._evaluator.apply_ai_analysis(signal, ai_analysis)
             signals[symbol] = signal
             updated.append(symbol)

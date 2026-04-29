@@ -32,11 +32,12 @@ class OpenAIAnalyzer:
         self._timeout_seconds = timeout_seconds
         self._api_key = api_key
         self._use_portkey = bool(normalized_base_url and 'api.portkey.ai' in normalized_base_url)
-        self._use_cloudflare_gateway = bool(normalized_base_url and 'gateway.ai.cloudflare.com' in normalized_base_url)
+        # Use direct httpx for any custom base URL to avoid OpenAI SDK injecting blocked headers
+        self._use_direct_httpx = bool(normalized_base_url) and not self._use_portkey
         self._force_chat_completions = normalized_base_url is not None
         self._portkey_client = Portkey(api_key=portkey_api_key) if self._use_portkey and portkey_api_key else None
         self._client = None
-        if not self._use_portkey and not self._use_cloudflare_gateway and api_key:
+        if not self._use_portkey and not self._use_direct_httpx and api_key:
             self._client = AsyncOpenAI(api_key=api_key, base_url=normalized_base_url)
 
     async def analyze(
@@ -49,8 +50,8 @@ class OpenAIAnalyzer:
 
         if self._use_portkey:
             return await self._analyze_with_portkey(signal, payload, chart_image)
-        if self._use_cloudflare_gateway:
-            return await self._analyze_with_cloudflare_gateway(signal, payload, chart_image)
+        if self._use_direct_httpx:
+            return await self._analyze_with_direct_httpx(signal, payload)
         if self._client is None:
             return OpenAIAnalysis()
 
@@ -95,7 +96,7 @@ class OpenAIAnalyzer:
             content = await asyncio.to_thread(self._portkey_chat_completion, payload, chart_image)
             if not content:
                 raise ValueError('Empty Portkey chat completion content')
-            return OpenAIAnalysis.model_validate(json.loads(content))
+            return OpenAIAnalysis.model_validate(self._extract_json(content))
         except Exception as exc:  # noqa: BLE001
             if chart_image is not None:
                 logger.warning(
@@ -107,39 +108,24 @@ class OpenAIAnalyzer:
                     content = await asyncio.to_thread(self._portkey_chat_completion, payload, None)
                     if not content:
                         raise ValueError('Empty Portkey text-only chat completion content')
-                    return OpenAIAnalysis.model_validate(json.loads(content))
+                    return OpenAIAnalysis.model_validate(self._extract_json(content))
                 except Exception as fallback_exc:  # noqa: BLE001
                     logger.warning('Portkey text-only fallback failed for %s: %s', signal.symbol, fallback_exc)
             logger.warning('Portkey analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
 
-    async def _analyze_with_cloudflare_gateway(
+    async def _analyze_with_direct_httpx(
         self,
         signal: SignalState,
         payload: dict[str, Any],
-        chart_image: bytes | None,
     ) -> OpenAIAnalysis:
         if not self._base_url or not self._api_key:
             return OpenAIAnalysis()
 
         try:
-            return await self._cloudflare_gateway_request(payload, chart_image=chart_image)
+            return await self._direct_httpx_request(payload)
         except Exception as exc:  # noqa: BLE001
-            if chart_image is not None:
-                logger.warning(
-                    'Cloudflare Gateway multimodal analysis failed for %s, falling back to text-only: %s',
-                    signal.symbol,
-                    exc,
-                )
-                try:
-                    return await self._cloudflare_gateway_request(payload, chart_image=None)
-                except Exception as fallback_exc:  # noqa: BLE001
-                    logger.warning(
-                        'Cloudflare Gateway text-only fallback failed for %s: %s',
-                        signal.symbol,
-                        fallback_exc,
-                    )
-            logger.warning('Cloudflare Gateway analysis failed for %s: %s', signal.symbol, exc)
+            logger.warning('Direct httpx analysis failed for %s: %s', signal.symbol, exc)
             return OpenAIAnalysis()
 
     def _portkey_chat_completion(
@@ -153,14 +139,7 @@ class OpenAIAnalyzer:
                 {'role': 'system', 'content': SYSTEM_PROMPT},
                 {'role': 'user', 'content': self._chat_user_content(payload, chart_image=chart_image)},
             ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    'name': 'technical_signal_ai_analysis',
-                    'schema': self._analysis_schema(),
-                },
-            },
-            MAX_TOKENS=512,
+            max_tokens=512,
         )
         return response.choices[0].message.content
 
@@ -171,15 +150,9 @@ class OpenAIAnalyzer:
                 {'role': 'system', 'content': SYSTEM_PROMPT},
                 {'role': 'user', 'content': build_user_prompt(payload)},
             ],
-            text={
-                'format': {
-                    'type': 'json_schema',
-                    'name': 'technical_signal_ai_analysis',
-                    'schema': self._analysis_schema(),
-                }
-            },
+            text={'format': {'type': 'text'}},
         )
-        return json.loads(response.output_text)
+        return self._extract_json(response.output_text)
 
     async def _analyze_with_chat_completions(
         self,
@@ -192,23 +165,16 @@ class OpenAIAnalyzer:
                 {'role': 'system', 'content': SYSTEM_PROMPT},
                 {'role': 'user', 'content': self._chat_user_content(payload, chart_image=chart_image)},
             ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    'name': 'technical_signal_ai_analysis',
-                    'schema': self._analysis_schema(),
-                },
-            },
+            max_tokens=512,
         )
         content = response.choices[0].message.content
         if not content:
             raise ValueError('Empty chat completion content')
-        return json.loads(content)
+        return self._extract_json(content)
 
-    async def _cloudflare_gateway_request(
+    async def _direct_httpx_request(
         self,
         payload: dict[str, Any],
-        chart_image: bytes | None,
     ) -> OpenAIAnalysis:
         headers = {
             'Authorization': f'Bearer {self._api_key}',
@@ -218,19 +184,31 @@ class OpenAIAnalyzer:
             'model': self._model,
             'messages': [
                 {'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': self._chat_user_content(payload, chart_image=chart_image)},
+                {'role': 'user', 'content': build_user_prompt(payload)},
             ],
             'max_tokens': 512,
         }
         url = self._chat_completion_url(self._base_url)
 
+        last_exc: Exception | None = None
         async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_seconds)) as client:
-            response = await client.post(url, headers=headers, json=request_body)
-            response.raise_for_status()
-        content = response.json()['choices'][0]['message']['content']
+            for attempt in range(4):
+                try:
+                    response = await client.post(url, headers=headers, json=request_body)
+                    response.raise_for_status()
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < 3:
+                        await asyncio.sleep(3 * (attempt + 1))  # 3s, 6s, 9s
+            else:
+                raise last_exc
+        # Server may append SSE "data: [DONE]" after the JSON — extract the JSON object directly
+        raw = self._extract_json(response.text)
+        content = raw['choices'][0]['message']['content']
         if not content:
-            raise ValueError('Empty Cloudflare Gateway chat completion content')
-        return OpenAIAnalysis.model_validate(json.loads(content))
+            raise ValueError('Empty chat completion content')
+        return OpenAIAnalysis.model_validate(self._extract_json(content))
 
     def _build_payload(self, signal: SignalState, chart_timeframe: str | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -285,25 +263,19 @@ class OpenAIAnalyzer:
         ]
 
     @staticmethod
-    def _analysis_schema() -> dict[str, Any]:
-        return {
-            'type': 'object',
-            'properties': {
-                'summary': {'type': 'string'},
-                'risk_notes': {'type': 'array', 'items': {'type': 'string'}},
-                'conflicts': {'type': 'array', 'items': {'type': 'string'}},
-                'telegram_note': {'type': 'string'},
-                'data_quality_warning': {'type': 'boolean'},
-            },
-            'required': [
-                'summary',
-                'risk_notes',
-                'conflicts',
-                'telegram_note',
-                'data_quality_warning',
-            ],
-            'additionalProperties': False,
-        }
+    def _extract_json(text: str) -> dict[str, Any]:
+        """Extract JSON from raw model output, handling markdown code fences."""
+        import re
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+        if fenced:
+            return json.loads(fenced.group(1))
+        # Find outermost { ... } in case of surrounding text
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            return json.loads(text[start:end + 1])
+        raise ValueError(f'No JSON object found in response: {text[:200]}')
 
     @staticmethod
     def _normalize_base_url(base_url: str | None) -> str | None:
