@@ -77,3 +77,5 @@ OpenAI is auxiliary only.
 - If OpenAI fails or is not configured, the bot continues with `AI analysis unavailable`.
 - To route requests through a proxy-compatible OpenAI endpoint, set `OPENAI_BASE_URL`.
 - Example proxy configuration: `OPENAI_BASE_URL=https://sub.tehuio.com`
+- If you set only the root domain, the app normalizes it to `/v1` automatically for OpenAI-compatible proxies.
+- If the proxy blocks `Responses API`, the app falls back to `chat.completions` automatically.
