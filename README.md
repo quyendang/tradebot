@@ -5,9 +5,10 @@ Phase 6 scaffold for a production-oriented FastAPI BTC/ETH signal bot.
 This phase includes:
 - Binance public OHLCV fetcher
 - technical indicators and decision engine
-- auxiliary OpenAI analyzer using `OPENAI_API_KEY` and `OPENAI_MODEL`
+- auxiliary OpenAI analyzer using `OPENAI_API_KEY`, `OPENAI_MODEL`, and optional `OPENAI_BASE_URL`
 - Telegram notifier and anti-spam policy
 - automatic background scheduler started with FastAPI
+- startup Telegram status message with initial analysis summary
 - `GET /signals`, `GET /signals/{symbol}`, and `POST /run-once`
 - persisted signal state and last Telegram send state in `STATE_PATH`
 
@@ -61,6 +62,12 @@ Telegram sends only when:
 
 The bot does not spam `HOLD` messages.
 
+On startup, if Telegram is configured, the bot also sends:
+- bot started status
+- scheduler interval
+- OpenAI configured status
+- initial BTC/ETH analysis snapshot or startup error
+
 ## OpenAI behavior
 
 OpenAI is auxiliary only.
@@ -68,3 +75,5 @@ OpenAI is auxiliary only.
 - It does not directly change the technical decision.
 - The only allowed override is forcing `HOLD` when `data_quality_warning=true`.
 - If OpenAI fails or is not configured, the bot continues with `AI analysis unavailable`.
+- To route requests through a proxy-compatible OpenAI endpoint, set `OPENAI_BASE_URL`.
+- Example proxy configuration: `OPENAI_BASE_URL=https://sub.tehuio.com`

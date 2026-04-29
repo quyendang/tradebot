@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIAnalyzer:
-    def __init__(self, api_key: str | None, model: str) -> None:
+    def __init__(self, api_key: str | None, model: str, base_url: str | None = None) -> None:
         self._model = model
-        self._client = AsyncOpenAI(api_key=api_key) if api_key else None
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url) if api_key else None
 
     async def analyze(self, signal: SignalState) -> OpenAIAnalysis:
         if self._client is None:

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str | None = None
     openai_model: str = 'gpt-4.1-mini'
+    openai_base_url: str | None = None
 
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None

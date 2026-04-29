@@ -33,14 +33,52 @@ class TelegramNotifier:
             f'Conflicts: {conflicts}'
         )
 
-    async def send(self, signal: SignalState) -> str | None:
+    def build_startup_message(
+        self,
+        signals: dict[str, SignalState],
+        interval_seconds: int,
+        startup_error: str | None = None,
+    ) -> str:
+        lines = [
+            'Tradebot started',
+            f'Interval: {interval_seconds}s',
+            f'OpenAI configured: {"yes" if self._settings.openai_api_key else "no"}',
+        ]
+
+        if startup_error is not None:
+            lines.append(f'Initial analysis error: {startup_error}')
+            return '\n'.join(lines)
+
+        if not signals:
+            lines.append('Initial analysis: no signals available')
+            return '\n'.join(lines)
+
+        lines.append('Initial analysis:')
+        for symbol in sorted(signals):
+            signal = signals[symbol]
+            ai_status = (
+                'warning'
+                if signal.ai_analysis.data_quality_warning
+                else 'ok'
+                if signal.ai_analysis.summary != 'AI analysis unavailable'
+                else 'unavailable'
+            )
+            lines.append(
+                f'{signal.symbol}: {signal.action} {signal.confidence} | '
+                f'Buy {signal.buy_score} Sell {signal.sell_score} | AI {ai_status}'
+            )
+            lines.append(f'Note: {signal.ai_analysis.telegram_note}')
+
+        return '\n'.join(lines)
+
+    async def send_text(self, text: str) -> str | None:
         if not self.is_enabled():
-            logger.info('Telegram not configured, skipping notification for %s', signal.symbol)
+            logger.info('Telegram not configured, skipping text notification')
             return None
 
         payload = {
             'chat_id': self._settings.telegram_chat_id,
-            'text': self.build_message(signal),
+            'text': text,
         }
         url = f'https://api.telegram.org/bot{self._settings.telegram_bot_token}/sendMessage'
         timeout = httpx.Timeout(self._settings.request_timeout_seconds)
@@ -51,5 +89,11 @@ class TelegramNotifier:
                 response.raise_for_status()
             return payload['text']
         except Exception as exc:  # noqa: BLE001
-            logger.warning('Telegram send failed for %s: %s', signal.symbol, exc)
+            logger.warning('Telegram startup/status send failed: %s', exc)
             return None
+
+    async def send(self, signal: SignalState) -> str | None:
+        if not self.is_enabled():
+            logger.info('Telegram not configured, skipping notification for %s', signal.symbol)
+            return None
+        return await self.send_text(self.build_message(signal))

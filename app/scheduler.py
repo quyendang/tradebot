@@ -24,10 +24,14 @@ class SignalService:
         self._anti_spam = AntiSpamPolicy(settings)
         self._notifier = TelegramNotifier(settings)
         self._evaluator = SignalEvaluator(
-            ai_analyzer=OpenAIAnalyzer(settings.openai_api_key, settings.openai_model)
+            ai_analyzer=OpenAIAnalyzer(
+                settings.openai_api_key,
+                settings.openai_model,
+                settings.openai_base_url,
+            )
         )
 
-    async def run_once(self) -> list[str]:
+    async def run_once(self, allow_notifications: bool = True) -> list[str]:
         state = self._state_store.load()
         signals = state.signals
         updated: list[str] = []
@@ -46,13 +50,14 @@ class SignalService:
             signals[symbol] = signal
             updated.append(symbol)
 
-            previous = state.telegram.get(symbol)
-            if self._anti_spam.should_send(signal, previous):
-                message = await self._notifier.send(signal)
-                if message is not None:
-                    state.telegram[symbol] = self._state_store.update_telegram_state(symbol, signal, message).telegram[symbol]
-                elif not self._notifier.is_enabled():
-                    logger.info('Telegram disabled; no notification persisted for %s', symbol)
+            if allow_notifications:
+                previous = state.telegram.get(symbol)
+                if self._anti_spam.should_send(signal, previous):
+                    message = await self._notifier.send(signal)
+                    if message is not None:
+                        state.telegram[symbol] = self._state_store.update_telegram_state(symbol, signal, message).telegram[symbol]
+                    elif not self._notifier.is_enabled():
+                        logger.info('Telegram disabled; no notification persisted for %s', symbol)
 
         state.signals = signals
         self._state_store.save(state)
@@ -65,11 +70,21 @@ class SignalService:
     def get_signal(self, symbol: str) -> SignalState | None:
         return self._state_store.load().signals.get(symbol.upper())
 
+    async def send_startup_status(self, startup_error: str | None = None) -> str | None:
+        state = self._state_store.load()
+        message = self._notifier.build_startup_message(
+            signals=state.signals,
+            interval_seconds=self._settings.check_interval_seconds,
+            startup_error=startup_error,
+        )
+        return await self._notifier.send_text(message)
+
 
 class BackgroundScheduler:
-    def __init__(self, service: SignalService, interval_seconds: int) -> None:
+    def __init__(self, service: SignalService, interval_seconds: int, run_immediately: bool = True) -> None:
         self._service = service
         self._interval_seconds = interval_seconds
+        self._run_immediately = run_immediately
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
 
@@ -91,7 +106,11 @@ class BackgroundScheduler:
             self._task = None
 
     async def _run_forever(self) -> None:
+        first_cycle = True
         while True:
+            if first_cycle and not self._run_immediately:
+                first_cycle = False
+                await asyncio.sleep(self._interval_seconds)
             try:
                 async with self._lock:
                     updated = await self._service.run_once()
@@ -100,4 +119,5 @@ class BackgroundScheduler:
                 raise
             except Exception as exc:  # noqa: BLE001
                 logger.exception('Scheduled analysis cycle failed: %s', exc)
+            first_cycle = False
             await asyncio.sleep(self._interval_seconds)
