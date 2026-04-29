@@ -17,6 +17,7 @@ class OpenAIAnalyzer:
     def __init__(self, api_key: str | None, model: str, base_url: str | None = None) -> None:
         self._model = model
         normalized_base_url = self._normalize_base_url(base_url)
+        self._force_chat_completions = normalized_base_url is not None
         self._client = AsyncOpenAI(api_key=api_key, base_url=normalized_base_url) if api_key else None
 
     async def analyze(self, signal: SignalState) -> OpenAIAnalysis:
@@ -53,15 +54,16 @@ class OpenAIAnalyzer:
             'reasons': signal.reasons[:8],
         }
 
-        try:
-            content = await self._analyze_with_responses(payload)
-            return OpenAIAnalysis.model_validate(content)
-        except Exception as responses_exc:  # noqa: BLE001
-            logger.warning(
-                'OpenAI responses API failed for %s, falling back to chat.completions: %s',
-                signal.symbol,
-                responses_exc,
-            )
+        if not self._force_chat_completions:
+            try:
+                content = await self._analyze_with_responses(payload)
+                return OpenAIAnalysis.model_validate(content)
+            except Exception as responses_exc:  # noqa: BLE001
+                logger.warning(
+                    'OpenAI responses API failed for %s, falling back to chat.completions: %s',
+                    signal.symbol,
+                    responses_exc,
+                )
         try:
             content = await self._analyze_with_chat_completions(payload)
             return OpenAIAnalysis.model_validate(content)

@@ -78,4 +78,5 @@ OpenAI is auxiliary only.
 - To route requests through a proxy-compatible OpenAI endpoint, set `OPENAI_BASE_URL`.
 - Example proxy configuration: `OPENAI_BASE_URL=https://sub.tehuio.com`
 - If you set only the root domain, the app normalizes it to `/v1` automatically for OpenAI-compatible proxies.
-- If the proxy blocks `Responses API`, the app falls back to `chat.completions` automatically.
+- If `OPENAI_BASE_URL` is set, the app uses `/v1/chat/completions` directly for maximum proxy compatibility.
+- Without `OPENAI_BASE_URL`, the app tries `Responses API` first and falls back to `chat.completions` if needed.
