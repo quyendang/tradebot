@@ -110,14 +110,14 @@ class SignalEvaluator:
                 low=float(breakout_buy_low),
                 high=float(breakout_buy_high),
                 zone_type='breakout_buy',
-                note='Mua khi giá đóng cửa trên kháng cự kèm khối lượng tăng xác nhận breakout.',
+                note=f'Mua khi giá đóng cửa trên kháng cự ({resistance:.2f}$) kèm khối lượng tăng xác nhận breakout.',
             )
         else:
             buy_zone = PriceZone(
                 low=float(min(pullback_buy_low, pullback_buy_high)),
                 high=float(max(pullback_buy_low, pullback_buy_high)),
                 zone_type='pullback_buy',
-                note='Mua khi giá pullback về vùng hỗ trợ/EMA mà không đóng cửa dưới hỗ trợ.',
+                note=f'Mua khi giá pullback về vùng hỗ trợ ({support:.2f}$)/EMA ({ema_50:.2f}$) mà không đóng cửa dưới hỗ trợ.',
             )
 
         if action == 'SELL_WATCH' and price <= support * 1.008:
