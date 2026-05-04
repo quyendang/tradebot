@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import httpx
 
@@ -8,6 +9,18 @@ from app.config import Settings
 from app.models.schema import SignalState
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_duration(seconds: float) -> str:
+    if seconds <= 0:
+        return 'đã đóng'
+    m = int(seconds // 60)
+    if m == 0:
+        return '<1p'
+    if m < 60:
+        return f'{m}p'
+    h, rem = divmod(m, 60)
+    return f'{h}g{rem:02d}p' if rem else f'{h}g'
 
 
 class TelegramNotifier:
@@ -32,8 +45,9 @@ class TelegramNotifier:
             f'Hỗ trợ: {signal.support:.2f}\n'
             f'Kháng cự: {signal.resistance:.2f}\n'
             f'Mốc vô hiệu: {signal.invalidation:.2f}\n'
-            f'Vùng mua dự kiến: {self._format_zone(signal.buy_zone)}\n'
-            f'Vùng bán dự kiến: {self._format_zone(signal.sell_zone)}\n'
+            f'Nến đóng sau: {self._format_candle_countdowns(signal)}\n'
+            f'Vùng mua: {self._format_zone(signal.buy_zone)}\n'
+            f'Vùng bán: {self._format_zone(signal.sell_zone)}\n'
             f'\n'
             f'Tóm tắt AI:\n{signal.ai_analysis.summary}\n'
             f'\n'
@@ -114,10 +128,19 @@ class TelegramNotifier:
         return 'Bình thường'
 
     @staticmethod
+    def _format_candle_countdowns(signal: SignalState) -> str:
+        now = datetime.now(timezone.utc)
+        parts = []
+        for ts in signal.timeframe_scores:
+            secs = (ts.indicators.close_time - now).total_seconds()
+            parts.append(f'{ts.timeframe}={_fmt_duration(secs)}')
+        return ' | '.join(parts) if parts else 'N/A'
+
+    @staticmethod
     def _format_zone(zone) -> str:
         if zone is None:
             return 'Chưa có'
-        return f'{zone.low:.2f} - {zone.high:.2f}'
+        return f'{zone.low:.2f} - {zone.high:.2f}\n  ↳ {zone.note}'
 
     async def send_text(self, text: str) -> str | None:
         if not self.is_enabled():

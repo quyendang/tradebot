@@ -94,11 +94,14 @@ class SignalEvaluator:
 
         pullback_buy_low = min(support - (atr * 0.25), bb_lower)
         pullback_buy_high = min(max(support + (atr * 0.35), support), ema_50)
-        breakout_buy_low = max(resistance - (atr * 0.15), support)
-        breakout_buy_high = resistance + (atr * 0.45)
+        # Breakout buy starts AT resistance to avoid overlapping with rejection sell zone
+        breakout_buy_low = resistance
+        breakout_buy_high = resistance + (atr * 0.6)
 
-        rejection_sell_low = max(resistance - (atr * 0.35), ema_50)
-        rejection_sell_high = max(resistance + (atr * 0.25), bb_upper)
+        # Cap rejection_sell_low at resistance so it never exceeds rejection_sell_high
+        rejection_sell_low = min(max(resistance - (atr * 0.35), ema_50), resistance)
+        # Rejection sell caps AT resistance to avoid overlapping with breakout buy zone
+        rejection_sell_high = resistance
         breakdown_sell_low = support - (atr * 0.45)
         breakdown_sell_high = min(support + (atr * 0.15), resistance)
 
@@ -107,14 +110,14 @@ class SignalEvaluator:
                 low=float(breakout_buy_low),
                 high=float(breakout_buy_high),
                 zone_type='breakout_buy',
-                note='Vùng mua breakout nếu giá vượt kháng cự với động lượng tốt.',
+                note='Mua khi giá đóng cửa trên kháng cự kèm khối lượng tăng xác nhận breakout.',
             )
         else:
             buy_zone = PriceZone(
                 low=float(min(pullback_buy_low, pullback_buy_high)),
                 high=float(max(pullback_buy_low, pullback_buy_high)),
                 zone_type='pullback_buy',
-                note='Vùng mua pullback quanh hỗ trợ và EMA ngắn hạn.',
+                note='Mua khi giá pullback về vùng hỗ trợ/EMA mà không đóng cửa dưới hỗ trợ.',
             )
 
         if action == 'SELL_WATCH' and price <= support * 1.008:
@@ -122,14 +125,14 @@ class SignalEvaluator:
                 low=float(min(breakdown_sell_low, breakdown_sell_high)),
                 high=float(max(breakdown_sell_low, breakdown_sell_high)),
                 zone_type='breakdown_sell',
-                note='Vùng bán breakdown nếu giá thủng hỗ trợ quan trọng.',
+                note='Bán khi giá đóng cửa dưới hỗ trợ kèm khối lượng tăng xác nhận breakdown.',
             )
         else:
             sell_zone = PriceZone(
                 low=float(min(rejection_sell_low, rejection_sell_high)),
                 high=float(max(rejection_sell_low, rejection_sell_high)),
                 zone_type='rejection_sell',
-                note='Vùng bán/reduce quanh kháng cự khi xuất hiện từ chối giá.',
+                note='Bán/reduce khi giá chạm kháng cự và xuất hiện nến từ chối (pin bar, engulfing).',
             )
 
         return buy_zone, sell_zone
