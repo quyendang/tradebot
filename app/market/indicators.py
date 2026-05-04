@@ -32,6 +32,11 @@ def add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     df['atr_14'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14)
     df['swing_high'] = df['high'].rolling(window=20, min_periods=1).max()
     df['swing_low'] = df['low'].rolling(window=20, min_periods=1).min()
+
+    # Volume features (Agent 2 - Volume Specialist):
+    # vol_ratio = volume / SMA20(volume); dùng để confirm breakout/breakdown.
+    df['volume_sma_20'] = df['volume'].rolling(window=20, min_periods=1).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_sma_20'].replace(0, float('nan'))
     return df
 
 

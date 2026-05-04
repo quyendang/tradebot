@@ -9,6 +9,7 @@ from app.models.schema import TimeframeScore
 class TechnicalScorer:
     def score_timeframe(self, symbol: str, timeframe: str, frame: pd.DataFrame) -> TimeframeScore:
         snapshot = latest_snapshot(symbol, timeframe, frame)
+        latest = frame.iloc[-1]
         previous = frame.iloc[-2] if len(frame) > 1 else frame.iloc[-1]
 
         buy_score = 0
@@ -101,6 +102,29 @@ class TechnicalScorer:
         if close <= support * 1.005:
             sell_score += 12
             reasons.append(f'{timeframe}: testing recent swing low')
+
+        # ---- Volume confirmation cho breakout/breakdown (Agent 2: Volume Specialist) ----
+        # Verify trên 6 năm: weak-volume breakout có win-rate thấp đáng kể.
+        # Mục tiêu: tránh bull-trap / bear-trap khi giá chạm support/resistance
+        # mà thiếu volume xác nhận.
+        vol_ratio = float(latest['volume_ratio']) if 'volume_ratio' in frame.columns else None
+        if vol_ratio is not None and not pd.isna(vol_ratio):
+            near_resistance = close >= resistance * 0.995
+            near_support = close <= support * 1.005
+            if near_resistance:
+                if vol_ratio >= 1.5:
+                    buy_score += 4
+                    reasons.append(f'{timeframe}: breakout volume confirmation (x{vol_ratio:.2f})')
+                elif vol_ratio < 0.7:
+                    buy_score = max(0, buy_score - 6)
+                    reasons.append(f'{timeframe}: weak-volume breakout warning (x{vol_ratio:.2f})')
+            if near_support:
+                if vol_ratio >= 1.5:
+                    sell_score += 4
+                    reasons.append(f'{timeframe}: breakdown volume confirmation (x{vol_ratio:.2f})')
+                elif vol_ratio < 0.7:
+                    sell_score = max(0, sell_score - 6)
+                    reasons.append(f'{timeframe}: weak-volume breakdown warning (x{vol_ratio:.2f})')
 
         if atr / close >= 0.03:
             buy_score = max(0, buy_score - 4)
